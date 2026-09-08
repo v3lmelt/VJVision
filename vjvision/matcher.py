@@ -466,6 +466,16 @@ class MatcherThread(threading.Thread):
         #   flow (N consecutive hits before switching the display).
         TENTATIVE_CONFIDENCE = 0.06
         MIN_ACCEPT_CONFIDENCE = 0.30
+        # First track uses a lower accept threshold (0.25) so the very
+        # first song confirms faster — we don't have a confirmed track to
+        # "lose" yet, and we've already suppressed the tentative pulse for
+        # the first track, so accepting at 0.25 is safe.  Subsequent
+        # tracks still need 0.30 to avoid flicker during quiet passages.
+        FIRST_TRACK_MIN_ACCEPT = 0.25
+        accept_threshold = (
+            FIRST_TRACK_MIN_ACCEPT if self._current_track_path is None
+            else MIN_ACCEPT_CONFIDENCE
+        )
 
         if result.confidence < TENTATIVE_CONFIDENCE:
             # --- Pure noise ---
@@ -483,8 +493,22 @@ class MatcherThread(threading.Thread):
                 self._send_viz({"type": "status", "text": "Listening…"})
             return
 
-        if result.confidence < MIN_ACCEPT_CONFIDENCE:
-            # --- Tentative zone ---
+        if result.confidence < accept_threshold:
+            # --- Tentative zone (or first-track below 0.25) ---
+            # First-song guard: before any track has been hard-confirmed
+            # (current_track_path is None) we must NOT show a pulsing
+            # tentative preview from a low-confidence hit.  A stray
+            # noise/ambient match below FIRST_TRACK_MIN_ACCEPT would
+            # otherwise lock the display onto the wrong song.  Wait
+            # silently for a ≥0.25 hit to confirm the first track.
+            if self._current_track_path is None:
+                self._send_viz({"type": "status", "text": "Listening…"})
+                log.info(
+                    "Ignoring tentative hit for first track: %s conf=%.2f",
+                    Path(result.file_path).name, result.confidence,
+                )
+                return
+
             # A different song showing up here (even at low confidence)
             # means a cross-fade may be starting.  Trigger the mix pulse
             # immediately instead of waiting for a ≥0.30 hit — otherwise
@@ -754,9 +778,12 @@ class MatcherThread(threading.Thread):
             #
             # A mix makes hash counts noisy (two songs' fingerprints
             # overlap), so we raise the confidence bar for switching —
-            # a ≥0.40 hit is a much stronger signal that the incoming
-            # song has actually taken over than the default 0.30 floor.
-            MIX_MIN_CONFIDENCE = 0.40
+            # a ≥0.30 hit is a stronger signal that the incoming song has
+            # actually taken over than the tentative 0.06 floor, while
+            # still being reachable when the new track's fingerprints are
+            # diluted by the outgoing track during a long cross-fade.
+            # (0.40 was too strict: long mixes often peak at 0.30–0.38.)
+            MIX_MIN_CONFIDENCE = 0.30
             if result.confidence < MIX_MIN_CONFIDENCE:
                 log.info(
                     "Mix hold — %s conf=%.2f below mix threshold %.2f",
@@ -970,6 +997,12 @@ class MatcherThread(threading.Thread):
 
             now = time.monotonic()
             base_interval = SETTINGS.capture.match_interval
+            # During a mix (pulsing display) we want to confirm the new
+            # track as fast as possible, so halve the recognition interval
+            # — more attempts per second means we catch the confidence
+            # climb sooner instead of waiting through a long cross-fade.
+            if self._in_mix:
+                base_interval = max(1.5, base_interval * 0.5)
 
             # --- Viz liveness check ---
             # If the visualizer died (ESC pressed, SDL crash, etc.), we

@@ -40,6 +40,44 @@ log = logging.getLogger(__name__)
 # run() takes a parameter named ``queue``).
 QueueEmpty = _q.Empty
 
+
+def _is_process_alive(pid: int) -> bool:
+    """Return True if the process with the given PID is still running.
+
+    Used by the visualizer child process to detect a dead parent (e.g. the
+    user closed the console window, killing the main process without
+    running its shutdown hooks).  Without this the pygame window would
+    keep running as an orphan.
+
+    Works on Windows via ``OpenProcess`` / ``GetExitCodeProcess``.  On
+    other platforms falls back to ``os.kill(pid, 0)``.
+    """
+    if pid <= 0:
+        return False
+    if os.name == "nt":
+        import ctypes
+        from ctypes import wintypes
+        PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
+        handle = ctypes.windll.kernel32.OpenProcess(
+            PROCESS_QUERY_LIMITED_INFORMATION, False, pid)
+        if not handle:
+            return False
+        try:
+            exit_code = wintypes.DWORD()
+            if ctypes.windll.kernel32.GetExitCodeProcess(
+                    handle, ctypes.byref(exit_code)):
+                # STILL_ACTIVE == 259
+                return exit_code.value == 259
+            return False
+        finally:
+            ctypes.windll.kernel32.CloseHandle(handle)
+    else:
+        try:
+            os.kill(pid, 0)
+            return True
+        except OSError:
+            return False
+
 SPECTRUM_STYLES = {"bar", "wave", "mirror"}
 
 PALETTE_BG_DARKEN_ALPHA = 165   # 0..255 - higher = darker background
@@ -976,7 +1014,12 @@ def run(queue, display_index: int = 1) -> None:
 
     _set_display_env(display_index)
     pygame.init()
-    pygame.display.set_caption(f"VJ-Visual 可视化输出  v{_version}")
+    pygame.display.set_caption(f"VJVision 可视化输出  v{_version}")
+
+    # Parent PID — used to detect a dead parent (console window closed,
+    # main process killed without running shutdown hooks).  If the parent
+    # dies we exit cleanly instead of lingering as an orphan window.
+    _parent_pid = os.getppid()
 
     # ----- mutable rendering state ---------------------------------------
     # Wrapped in a dict so the nested ``_reinit_display`` helper can mutate
@@ -1453,6 +1496,18 @@ def run(queue, display_index: int = 1) -> None:
         # --- update animation --------------------------------------
         dt = clock.tick(60) / 1000.0
         rs["frame_no"] += 1
+
+        # --- parent liveness check (every ~0.5s) --------------------
+        # If the main process died (e.g. user closed the console window)
+        # the shutdown hooks in main.py never ran, so we self-terminate
+        # instead of leaving an orphan pygame window on screen.
+        if rs["frame_no"] % 30 == 0:
+            if not _is_process_alive(_parent_pid):
+                log.info(
+                    "Parent process (pid=%d) gone — exiting visualizer.",
+                    _parent_pid,
+                )
+                running = False
         speed = state.rotation_speed
         if state.beat_reactive and state.peak > 0:
             speed *= (1.0 + min(2.0, state.peak * 3.0))

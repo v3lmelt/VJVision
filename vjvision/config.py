@@ -1,4 +1,4 @@
-"""Central configuration for VJ-Visual.
+"""Central configuration for VJVision.
 
 All paths, device hints and tunables live here so the rest of the codebase
 stays free of magic numbers.
@@ -31,7 +31,7 @@ def _compute_base_dirs() -> tuple[Path, Path, Path, Path]:
       PC B carries every analysed artifact along.
     * ``prefs_dir`` — **NOT** portable.  Per-user, per-machine storage for
       things that depend on local hardware (audio device index, monitor
-      choice).  Lives in ``%APPDATA%/VJ-Visual/`` so the same exe on a
+      choice).  Lives in ``%APPDATA%/VJVision/`` so the same exe on a
       USB drive auto-restores its last-used device on the same PC, but
       doesn't pollute PC B with PC A's PortAudio indexes.
     """
@@ -43,13 +43,13 @@ def _compute_base_dirs() -> tuple[Path, Path, Path, Path]:
         app_dir = Path(__file__).resolve().parent.parent
         bundle_dir = app_dir
         data_dir = app_dir / "cache"
-    # Per-machine prefs — always %APPDATA%\VJ-Visual\, regardless of
+    # Per-machine prefs — always %APPDATA%\VJVision\, regardless of
     # whether we're frozen or running as source.
-    prefs_dir = Path(os.environ.get("APPDATA", str(Path.home() / ".config"))) / "VJ-Visual"
+    prefs_dir = Path(os.environ.get("APPDATA", str(Path.home() / ".config"))) / "VJVision"
     return bundle_dir, app_dir, data_dir, prefs_dir
 
 
-# ``__file__`` is ``vjvisual/config.py`` so PROJECT_ROOT is two levels up.
+# ``__file__`` is ``vjvision/config.py`` so PROJECT_ROOT is two levels up.
 BUNDLE_DIR, APP_DIR, CACHE_DIR, PREFS_DIR = _compute_base_dirs()
 PROJECT_ROOT = APP_DIR
 # dejavu fingerprint store (SQLite backend in portable builds) and the
@@ -58,8 +58,8 @@ FINGERPRINTS_DB = CACHE_DIR / "fingerprints.db"
 SONG_PATHS_DB = CACHE_DIR / "song_paths.sqlite"
 COVER_CACHE = CACHE_DIR / "covers"
 TEMP_AUDIO = CACHE_DIR / "tmp_capture.wav"
-LOG_FILE = CACHE_DIR / "vj_visual.log"
-# prefs.json lives in %APPDATA%\VJ-Visual\ — NOT on the U盘.  This lets
+LOG_FILE = CACHE_DIR / "vjvision.log"
+# prefs.json lives in %APPDATA%\VJVision\ — NOT on the U盘.  This lets
 # the same exe auto-restore its last-used audio device on the same PC,
 # but doesn't carry PC A's PortAudio indexes over to PC B.
 PREFS_FILE = PREFS_DIR / "prefs.json"
@@ -87,10 +87,12 @@ class CaptureConfig:
                                      # 8s = too short for low-hash-density songs
                                      # (confidence 0.05-0.12); 12s stabilises
                                      # real matches at 0.20-0.85.
-    match_interval: int = 6          # seconds between recognition attempts.
+    match_interval: int = 4          # seconds between recognition attempts.
                                      # 12s was too slow when DJ switches tracks;
-                                     # 6s gives us ~2 recognition opportunities
-                                     # per track change to confirm identity.
+                                     # 6s gave ~2 opportunities per change but
+                                     # long cross-fades still took ~28s to
+                                     # confirm; 4s catches the confidence climb
+                                     # faster during extended mixes.
     match_confirmations: int = 2     # require N consecutive hits before
                                      # switching the displayed track.  This
                                      # filters out the occasional low-confidence
@@ -151,10 +153,10 @@ def save_prefs() -> None:
     """
     prefs = {
         # audio_device IS persisted — but prefs.json itself lives in
-        # %APPDATA%\VJ-Visual\ (see PREFS_FILE), NOT on the USB drive.
+        # %APPDATA%\VJVision\ (see PREFS_FILE), NOT on the USB drive.
         # So the same exe auto-restores its last-used device on the same
         # PC, while PC B gets a clean "pick your device" experience since
-        # its %APPDATA%\VJ-Visual\prefs.json doesn't exist yet.
+        # its %APPDATA%\VJVision\prefs.json doesn't exist yet.
         "audio_device": SETTINGS.audio_device,
         "music_dir": str(SETTINGS.music_dir),
         "visualizer_display": SETTINGS.visualizer_display,
@@ -173,10 +175,15 @@ def load_prefs() -> None:
     Missing keys are silently ignored — code-level defaults in the
     :class:`Settings` dataclass always win when no saved value is present.
     """
-    if not PREFS_FILE.is_file():
+    # Preserve machine preferences when upgrading the old VJ-Visual checkout.
+    # Once saved under VJVision, that file takes precedence over the legacy one.
+    source = PREFS_FILE
+    if not source.is_file():
+        source = PREFS_FILE.parent.parent / "VJ-Visual" / "prefs.json"
+    if not source.is_file():
         return
     try:
-        with open(PREFS_FILE, "r", encoding="utf-8") as f:
+        with open(source, "r", encoding="utf-8") as f:
             prefs = json.load(f)
     except (OSError, json.JSONDecodeError):
         return

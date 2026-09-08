@@ -1,10 +1,10 @@
-"""VJ-Visual: real-time audio-reactive visualizer for DJ sets.
+"""VJVision: real-time audio-reactive visualizer for DJ sets.
 
 Top-level package re-exports the most useful entry points.
 """
 from __future__ import annotations
 
-__version__ = "1.1.0-beta"
+__version__ = "1.1.3-beta"
 
 # Re-export Settings singleton (used by every module).
 from . import config  # noqa: F401  (ensures config side-effects run first)

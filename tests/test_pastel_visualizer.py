@@ -8,9 +8,9 @@ import wave
 import numpy as np
 import pygame
 
-from vjvisual.metadata import extract_track
-from vjvisual.pastel_visualizer import PastelRenderer, _db
-from vjvisual.visualizer import VisualState
+from vjvision.metadata import extract_track
+from vjvision.pastel_visualizer import PastelRenderer, _db
+from vjvision.visualizer import VisualState
 
 
 class PastelTests(unittest.TestCase):

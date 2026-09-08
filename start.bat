@@ -8,7 +8,7 @@ if not exist ".venv\Scripts\python.exe" (
 )
 ".venv\Scripts\python.exe" main.py
 if errorlevel 1 (
-    echo VJ-Visual failed to start. See the error above.
+    echo VJVision failed to start. See the error above.
     pause
     exit /b 1
 )

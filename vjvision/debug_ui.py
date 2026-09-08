@@ -48,7 +48,11 @@ class DebugUI:
         ctk.set_appearance_mode("dark")
         ctk.set_default_color_theme("blue")
         self.root = ctk.CTk()
-        self.root.title(f"VJ-Visual 控制台  v{__version__}")
+        self.root.title(f"VJVision 控制台  v{__version__}")
+        # Clicking the window X runs the same shutdown path as the quit
+        # button: notify the matcher, then destroy the window so main.py's
+        # finally block runs (stops the visualizer child process, etc.).
+        self.root.protocol("WM_DELETE_WINDOW", self.quit)
         # Auto-fit window height to the screen so everything fits
         # comfortably on first open; the scrollbar kicks in only if the
         # user shrinks the window manually.

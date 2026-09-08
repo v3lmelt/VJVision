@@ -81,7 +81,7 @@ def _register_sqlite_backend() -> None:
     from .dejavu_sqlite import SQLiteDatabase  # noqa: F401 (bundling + sanity)
 
     _djv_settings.DATABASES["sqlite"] = (
-        "vjvisual.dejavu_sqlite", "SQLiteDatabase")
+        "vjvision.dejavu_sqlite", "SQLiteDatabase")
 
 
 @dataclass
@@ -505,7 +505,8 @@ class FingerprintDB:
         ``fingerprint_file`` (compute + write) leads to "database is
         locked" errors once the store grows past a few hundred songs.
 
-        Returns ``(song_name, hashes, file_hash)`` or ``None`` on error.
+        Returns ``(song_name, hashes, file_hash, None)`` on success or
+        ``(None, None, None, error_msg)`` on error.
         """
         try:
             from dejavu import Dejavu
@@ -518,10 +519,15 @@ class FingerprintDB:
             hashes, file_hash = Dejavu.get_file_fingerprints(
                 path_str, self._djv.limit, print_output=False,
             )
-            return song_name, hashes, file_hash
+            return song_name, hashes, file_hash, None
         except Exception as exc:
-            log.error("Failed to fingerprint %s: %s", path_str, exc)
-            return None
+            # Return the error message so the MAIN process can log it —
+            # worker-process log.error() is often not captured by the
+            # main log file under multiprocessing, which made FLAC
+            # decode failures (e.g. 24-bit FLAC on old pydub path)
+            # silently invisible to users.
+            err = f"{type(exc).__name__}: {exc}"
+            return None, None, None, err
 
     def _rebuild_hash_cache(self) -> None:
         """Build file_sha1 → song_id dict from dejavu's songs table."""
@@ -587,20 +593,20 @@ class FingerprintDB:
         instead of building a new one per song — the old pattern paid
         the full dejavu-init + hash-cache-rebuild cost for every file.
 
-        Returns ``(file_path, song_name, hashes, file_hash)`` or
-        ``(file_path, None, None, None)`` on failure.  The parent
-        process performs all DB writes to avoid SQLite lock contention.
+        Returns ``(file_path, song_name, hashes, file_hash, None)`` on
+        success or ``(file_path, None, None, None, error_msg)`` on
+        failure.  The parent process performs all DB writes and logs
+        the error (worker logging is unreliable under multiprocessing).
         """
         global _worker_db
         try:
-            result = _worker_db._fingerprint_one(path_str)
-            if result is None:
-                return (path_str, None, None, None)
-            song_name, hashes, file_hash = result
-            return (path_str, song_name, hashes, file_hash)
+            song_name, hashes, file_hash, err = _worker_db._fingerprint_one(path_str)
+            if hashes is None:
+                return (path_str, None, None, None, err)
+            return (path_str, song_name, hashes, file_hash, None)
         except Exception as exc:
-            log.error("Worker failed on %s: %s", path_str, exc)
-            return (path_str, None, None, None)
+            err = f"{type(exc).__name__}: {exc}"
+            return (path_str, None, None, None, err)
 
     def index_files(
         self,
@@ -641,7 +647,7 @@ class FingerprintDB:
         last_done = 0
         last_t = t0
         with _mp.Pool(n_workers, initializer=_init_worker) as pool:
-            for path_str, song_name, hashes, file_hash in pool.imap_unordered(
+            for path_str, song_name, hashes, file_hash, err in pool.imap_unordered(
                 FingerprintDB._mp_fingerprint_worker, todo, chunksize=4
             ):
                 if self._cancel_flag:
@@ -672,6 +678,11 @@ class FingerprintDB:
                 else:
                     fail_count += 1
                     status = "Failed"
+                    # Log the actual exception (returned from the worker)
+                    # so failures are diagnosable — the old code swallowed
+                    # these and users only saw "Failed: name.flac" with
+                    # no hint WHY (e.g. 24-bit FLAC decode errors).
+                    log.error("Failed to fingerprint %s: %s", fname, err or "unknown error")
                 msg = (f"{status}: {fname} "
                        f"(+{elapsed_this:.1f}s, {per_done:.1f}s/avg, "
                        f"ETA {eta:.0f}s)")
@@ -727,7 +738,7 @@ class FingerprintDB:
         with _mp.Pool(n_workers, initializer=_init_worker) as pool:
             t0 = time.time()
             last_t = t0
-            for path_str, song_name, hashes, file_hash in pool.imap_unordered(
+            for path_str, song_name, hashes, file_hash, err in pool.imap_unordered(
                 FingerprintDB._mp_fingerprint_worker, todo, chunksize=4
             ):
                 if self._cancel_flag:
@@ -756,6 +767,7 @@ class FingerprintDB:
                 else:
                     fail_count += 1
                     status = "Failed"
+                    log.error("Failed to fingerprint %s: %s", fname, err or "unknown error")
                 msg = (f"{status}: {fname} "
                        f"(+{elapsed_this:.1f}s, {per_done:.1f}s/avg, "
                        f"ETA {eta:.0f}s)")

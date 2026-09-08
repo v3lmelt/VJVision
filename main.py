@@ -1,4 +1,4 @@
-"""Entry point for VJ-Visual.
+"""Entry point for VJVision.
 
 Spawns three actors:
     1. Visualizer process  (pygame on the 2nd display, managed by VisualizerManager)
@@ -21,10 +21,10 @@ import time
 from logging.handlers import RotatingFileHandler
 from typing import Optional
 
-from vjvisual import config as cfg
-from vjvisual.debug_ui import DebugUI
-from vjvisual.matcher import MatcherThread
-from vjvisual.visualizer import run as run_visualizer
+from vjvision import config as cfg
+from vjvision.debug_ui import DebugUI
+from vjvision.matcher import MatcherThread
+from vjvision.visualizer import run as run_visualizer
 
 log = logging.getLogger("vj")
 
@@ -211,7 +211,7 @@ def main() -> int:
     # Force multiprocessing to use the CURRENT executable for spawning
     # child processes:
     #   dev mode   → pythonw.exe (no console)
-    #   frozen exe → VJ-Visual.exe (windowed, no console)
+    #   frozen exe → VJVision.exe (windowed, no console)
     # Without this, Windows falls back to python.exe which pops a black
     # console window per spawned process — and indexing can spawn
     # 12 workers simultaneously, so 12 black windows flash on screen.

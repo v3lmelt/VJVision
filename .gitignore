@@ -3,6 +3,7 @@ build/
 dist-onefile/
 dist/
 *.spec.bak
+*.zip
 
 # Python
 .venv/
@@ -10,12 +11,9 @@ __pycache__/
 *.pyc
 *.pyo
 
-# Cache & runtime data
+# Personal libraries, runtime databases, logs and preferences
 cache/
 data/
-cache/covers/
-cache/vj_visual.log
-data/vj_visual.log
 
 # IDE
 .vscode/

@@ -4,7 +4,7 @@ from PyInstaller.utils.hooks import collect_all
 
 datas = []
 binaries = []
-hiddenimports = ['vjvisual.dejavu_sqlite', 'dejavu', 'dejavu.logic', 'dejavu.logic.fingerprint', 'dejavu.logic.recognizer', 'dejavu.database_handler', 'dejavu.third_party', 'scipy', 'scipy.signal', 'customtkinter', 'sounddevice', 'soundfile', 'pygame', 'mutagen']
+hiddenimports = ['vjvision.dejavu_sqlite', 'dejavu', 'dejavu.logic', 'dejavu.logic.fingerprint', 'dejavu.logic.recognizer', 'dejavu.database_handler', 'dejavu.third_party', 'scipy', 'scipy.signal', 'customtkinter', 'sounddevice', 'soundfile', 'pygame', 'mutagen']
 datas += collect_data_files('customtkinter')
 tmp_ret = collect_all('sounddevice')
 datas += tmp_ret[0]; binaries += tmp_ret[1]; hiddenimports += tmp_ret[2]
@@ -33,7 +33,7 @@ exe = EXE(
     a.binaries,
     a.datas,
     [],
-    name='VJ-Visual',
+    name='VJVision',
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,

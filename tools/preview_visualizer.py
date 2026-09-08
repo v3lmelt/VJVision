@@ -10,8 +10,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import numpy as np
 import pygame
 
-from vjvisual.pastel_visualizer import PastelRenderer
-from vjvisual.visualizer import VisualState, _pick_font
+from vjvision.pastel_visualizer import PastelRenderer
+from vjvision.visualizer import VisualState, _pick_font
 
 
 def main():

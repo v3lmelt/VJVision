@@ -2,7 +2,7 @@
 
 ## Project Structure & Module Organization
 
-`main.py` coordinates the CustomTkinter control UI, matcher thread, and separate pygame visualizer process. Application modules live in `vjvisual/`:
+`main.py` coordinates the CustomTkinter control UI, matcher thread, and separate pygame visualizer process. Application modules live in `vjvision/`:
 
 - `audio_capture.py` handles audio input; `matcher.py` coordinates recognition.
 - `fingerprint.py` manages indexing; `dejavu_sqlite.py` supplies SQLite storage.
@@ -10,7 +10,7 @@
 - `debug_ui.py`, `visualizer.py`, and `pastel_visualizer.py` implement controls and display themes.
 - `config.py` defines settings and runtime paths.
 
-`cache/` contains development databases and generated assets. Artwork comes from music metadata or a user-selected standby image. `build.bat` and `VJ-Visual.spec` support Windows packaging. `tests/` contains automated checks; `tools/` contains preview utilities.
+`cache/` contains development databases and generated assets. Artwork comes from music metadata or a user-selected standby image. `build.bat` and `VJVision.spec` support Windows packaging. `tests/` contains automated checks; `tools/` contains preview utilities.
 
 ## Build, Test, and Development Commands
 
@@ -22,8 +22,8 @@ Run these commands from the repository root in PowerShell:
 - `python -m pip install --no-deps -r requirements-dejavu.txt` installs the pinned audio recognition library after its runtime dependencies.
 - `python main.py` launches the control UI and visualizer.
 - `.\start.bat` launches using the project environment without activation.
-- `python -m compileall -q main.py vjvisual` checks Python syntax without launching the application.
-- `.\build.bat` packages `dist-onefile/VJ-Visual.exe`, installing PyInstaller if needed and replacing previous build output. Close running packaged instances first.
+- `python -m compileall -q main.py vjvision` checks Python syntax without launching the application.
+- `.\build.bat` packages `dist-onefile/VJVision.exe`, installing PyInstaller if needed and replacing previous build output. Close running packaged instances first.
 
 ## Coding Style & Naming Conventions
 
@@ -35,8 +35,8 @@ Run `python -m unittest discover -s tests -v` for signal, layout, and metadata c
 
 ## Commit & Pull Request Guidelines
 
-This checkout has no Git metadata, so existing commit conventions cannot be verified. Use concise, imperative subjects such as `Fix visualizer restart handling`. Keep changes focused. Pull requests should describe behavior changes, link relevant issues, document validation, and include screenshots for UI changes.
+Follow the existing `feat:`, `fix:`, `docs:`, and `chore:` commit prefixes with concise imperative subjects. Keep changes focused. Pull requests should describe behavior changes, link relevant issues, document validation, and include screenshots for UI changes.
 
 ## Configuration & Runtime Data
 
-Development data lives in `cache/`; packaged data lives beside the executable in `data/`. Machine preferences live in `%APPDATA%/VJ-Visual/prefs.json`. Preserve this separation. Avoid committing personal music paths, generated databases, logs, or packaged output.
+Development data lives in `cache/`; packaged data lives beside the executable in `data/`. Machine preferences live in `%APPDATA%/VJVision/prefs.json`. Preserve this separation. Avoid committing personal music paths, generated databases, logs, or packaged output.
