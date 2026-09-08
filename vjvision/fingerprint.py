@@ -279,6 +279,24 @@ class FingerprintDB:
         _decoder.read = _patched_read
 
     @staticmethod
+    def _erode_peak_background(background, structure, border_value=0):
+        """Equivalent rectangular erosion using separable minimum filters.
+
+        Dejavu's configured peak neighborhood is a full square. A minimum
+        over its rows and columns produces exactly the same boolean mask
+        as binary erosion, without visiting every square element per pixel.
+        Keep scipy's general implementation for nonrectangular footprints.
+        """
+        import numpy as np
+        from scipy import ndimage
+
+        if np.all(structure):
+            return ndimage.minimum_filter(
+                background, size=structure.shape, mode="constant", cval=border_value,
+            )
+        return ndimage.binary_erosion(background, structure=structure, border_value=border_value)
+
+    @staticmethod
     def _optimize_dejavu_params() -> None:
         """Monkey-patch dejavu config to produce FAR fewer fingerprints.
 
@@ -302,6 +320,8 @@ class FingerprintDB:
         """
         import dejavu.config.settings as _s
         import dejavu.logic.fingerprint as _fp
+
+        _fp.binary_erosion = FingerprintDB._erode_peak_background
 
         log.info("Tuning dejavu for DJ library (reducing hash density)")
 
@@ -934,7 +954,17 @@ class FingerprintDB:
         # This only affects the fingerprint path; the spectrum display
         # uses the original (un-normalised) levels.
         samples = np.asarray(samples, dtype=np.float32)
+        if not samples.size:
+            return MatchResult(False, None, 0.0, 0.0, None, {})
         peak = float(np.max(np.abs(samples)))
+        if peak == 0.0:
+            # No peaks can survive exact silence. Avoid the expensive
+            # spectrogram / morphology path without gating quiet music.
+            return MatchResult(False, None, 0.0, 0.0, None, {
+                "total_time": time.time() - t0,
+                "query_time": 0.0, "align_time": 0.0,
+                "fingerprint_time": 0.0, "fingerprints_total": 0,
+            })
         if peak > 1e-6:
             samples = samples * (0.95 / peak)
 

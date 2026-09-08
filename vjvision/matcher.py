@@ -12,17 +12,22 @@ from __future__ import annotations
 
 import logging
 import queue as _queue
+import random
 import threading
 import time
+from dataclasses import replace
 from pathlib import Path
-from typing import Optional
+from typing import TYPE_CHECKING, Optional
 
 from .audio_capture import AudioCapture
 from .config import SETTINGS
-from .fingerprint import FingerprintDB
+from .fingerprint import FingerprintDB, MatchResult
 from .metadata import Track, extract_track
 
 log = logging.getLogger(__name__)
+
+if TYPE_CHECKING:
+    import numpy as np
 
 
 class MatcherThread(threading.Thread):
@@ -47,19 +52,19 @@ class MatcherThread(threading.Thread):
         # falls back to the same SETTINGS value when given None).
         self._device_index: Optional[int] = SETTINGS.audio_device
         self._capture_running = False
-        self._last_match_ts = 0.0
         self._current_track_path: Optional[str] = None
-        # Track-change confirmation filter: require N consecutive hits on
-        # the same song_id before we actually switch the displayed track.
+        # Track-change confirmation filter: require N strong hits on one
+        # consistent candidate within a bounded time before switching.
         # Kills false positives from brief noise or DJ transitions.
         self._pending_path: Optional[str] = None
         self._pending_hits: int = 0
+        self._pending_since: float = 0.0
         # Hold the current artwork while a different candidate is being
-        # confirmed. Recovery of the current track uses the same streak rule.
+        # confirmed. Recovery of the current track uses the same evidence rule.
         self._in_mix: bool = False
         # Periodic verification scheduling: we add random jitter to the
         # match interval so checks aren't rhythmically predictable.
-        self._match_jitter_deadline: float = 0.0
+        self._next_match_ts: float = 0.0
         # Cumulator for batched prepare_files messages (UI sends in 500-file
         # chunks to stay under the multiprocessing pipe's 64KB buffer limit).
         self._prepare_pending: list[str] = []
@@ -247,6 +252,8 @@ class MatcherThread(threading.Thread):
             if self._capture.current_level().get("active") is False:
                 self._capture.start()
             self._capture.spectrum_enabled = True
+            if not self._capture_running:
+                self._next_match_ts = 0.0
             self._capture_running = True
             self._send_ui({"type": "capture_status", "text": "采集：运行中"})
             self._send_viz({"type": "status", "text": "Capture started"})
@@ -403,9 +410,10 @@ class MatcherThread(threading.Thread):
 
     # -- matching --------------------------------------------------------
     def _clear_pending_match(self) -> None:
-        """Discard evidence whenever consecutive recognition is interrupted."""
+        """Discard expired, conflicting or interrupted recognition evidence."""
         self._pending_path = None
         self._pending_hits = 0
+        self._pending_since = 0.0
 
     def _set_mix_state(self, active: bool) -> None:
         """Keep the visualizer's pulse in sync without changing the track."""
@@ -435,6 +443,56 @@ class MatcherThread(threading.Thread):
         """Preserve artwork, but never carry evidence across capture sessions."""
         self._clear_pending_match()
         self._set_mix_state(False)
+        self._next_match_ts = 0.0
+
+    def _match_snapshot(self, snapshot: "np.ndarray", sample_rate: int) -> MatchResult:
+        """Prefer recent evidence; verify switches and weak results over 12 s.
+
+        Both queries observe the same snapshot and produce a single result
+        for the confirmation filter. Conflicting older evidence must not
+        replace a plausible candidate in the recent audio.
+        """
+        cfg = SETTINGS.capture
+        frames = max(1, int(cfg.fast_match_seconds * sample_rate))
+        recent = snapshot[-frames:]
+        short = self._fp.match_from_array(recent, input_sr=sample_rate)
+        threshold = (cfg.first_track_confidence if self._current_track_path is None
+                     else cfg.match_confidence)
+        accepted = short.matched and short.file_path and short.confidence >= threshold
+        switching = (self._current_track_path is not None
+                     and short.file_path != self._current_track_path)
+        if ((accepted and not switching) or len(snapshot) <= frames):
+            return short
+        # A silent full buffer needs no second query. The fingerprint path
+        # also guards silence, including callers outside this matcher.
+        if not snapshot.any():
+            return short
+        fallback = self._fp.match_from_array(snapshot, input_sr=sample_rate)
+        plausible_short = (short.matched and short.file_path
+                           and short.confidence >= cfg.mix_candidate_confidence)
+        if plausible_short and fallback.file_path != short.file_path:
+            return replace(short, raw={**short.raw, "window_agrees": False})
+        if accepted and switching:
+            # Short clips can identify a briefly introduced secondary deck.
+            # A switch also needs accepted support from the longer window;
+            # return its actual score rather than inflating a short hit.
+            if fallback.matched:
+                return fallback
+            return replace(short, raw={**short.raw, "window_agrees": False})
+        if fallback.matched and fallback.file_path and fallback.confidence > short.confidence:
+            return fallback
+        return short
+
+    def _schedule_next_match(self, started_at: float) -> None:
+        """Schedule from the updated state, allowing at least 1 s of new audio."""
+        cfg = SETTINGS.capture
+        candidate = (self._current_track_path is None or self._in_mix
+                     or self._pending_path is not None)
+        interval = cfg.match_candidate_interval if candidate else cfg.match_interval
+        jitter = max(0.0, min(0.3, cfg.match_jitter_ratio))
+        delay = max(1.0, interval * random.uniform(1.0 - jitter, 1.0 + jitter))
+        # Slow recognition must still yield to commands and level updates.
+        self._next_match_ts = max(started_at + delay, time.monotonic() + 0.05)
 
     def _run_match(self) -> None:
         if not self._capture_running or self._capture is None:
@@ -453,9 +511,7 @@ class MatcherThread(threading.Thread):
             return
         self._send_viz({"type": "status", "text": "Matching..."})
         try:
-            result = self._fp.match_from_array(
-                snapshot, input_sr=self._capture.sr,
-            )
+            result = self._match_snapshot(snapshot, self._capture.sr)
         except Exception as exc:
             self._clear_pending_match()
             self._log(f"Match raised: {exc}", "error")
@@ -468,20 +524,33 @@ class MatcherThread(threading.Thread):
             return
 
         cfg = SETTINGS.capture
+        now = time.monotonic()
+        # Large configured confirmation counts also need enough time for
+        # their minimum number of fresh snapshots.
+        evidence_seconds = max(
+            cfg.match_confirmation_seconds,
+            (max(1, cfg.match_confirmations) - 1) * cfg.match_candidate_interval
+            * (1 + max(0.0, min(0.3, cfg.match_jitter_ratio))) + 0.5,
+        )
+        if self._pending_path is not None and now - self._pending_since > evidence_seconds:
+            self._clear_pending_match()
         accept_threshold = (
             cfg.first_track_confidence if self._current_track_path is None
             else cfg.match_confidence
         )
-        if result.confidence < accept_threshold:
-            # A weak hit never contributes to a later confirmation, even
-            # when its identity agrees with the pending candidate.
-            self._clear_pending_match()
+        window_agrees = result.raw.get("window_agrees", True)
+        if result.confidence < accept_threshold or not window_agrees:
+            # A weak hit adds no vote. Only the same plausible candidate
+            # may preserve unexpired evidence; conflicts/noise reset it.
+            if (not window_agrees or result.file_path != self._pending_path
+                    or result.confidence < cfg.mix_candidate_confidence):
+                self._clear_pending_match()
             if (result.confidence >= cfg.mix_candidate_confidence
                     and self._current_track_path is not None
                     and result.file_path != self._current_track_path):
                 self._set_mix_state(True)
             # A weak hit on the outgoing song is not evidence that a mix
-            # has ended. Wait for consecutive accepted hits on either song.
+            # has ended. Wait for enough recent strong hits on either song.
             self._send_viz({
                 "type": "status",
                 "text": "Mixing…" if self._in_mix else "Listening…",
@@ -506,6 +575,7 @@ class MatcherThread(threading.Thread):
         else:
             self._pending_path = result.file_path
             self._pending_hits = 1
+            self._pending_since = now
         if self._pending_hits < confirm_needed:
             log.info(
                 "Pending match (%d/%d): %s (conf=%.2f)",
@@ -640,16 +710,11 @@ class MatcherThread(threading.Thread):
 
     # -- main loop -------------------------------------------------------
     def run(self) -> None:
-        import random as _random
         self._log("Matcher thread started.")
-        last_match_ts = 0.0
         last_level_ts = 0.0
         last_viz_check_ts = 0.0
         level_period = 0.1        # 10 fps level updates to the UI
         viz_check_period = 5.0    # check viz process liveness every 5s
-        # Start with a small random offset so first match doesn't happen
-        # exactly at match_interval after start (avoids predictability).
-        self._match_jitter_deadline = _random.uniform(0.5, 2.0)
 
         # Open the input stream in MONITOR mode right away: the operator
         # must be able to verify signal levels on the selected soundcard
@@ -669,14 +734,6 @@ class MatcherThread(threading.Thread):
                 pass
 
             now = time.monotonic()
-            base_interval = SETTINGS.capture.match_interval
-            # During a mix (pulsing display) we want to confirm the new
-            # track as fast as possible, so halve the recognition interval
-            # — more attempts per second means we catch the confidence
-            # climb sooner instead of waiting through a long cross-fade.
-            if self._in_mix:
-                base_interval = max(1.5, base_interval * 0.5)
-
             # --- Viz liveness check ---
             # If the visualizer died (ESC pressed, SDL crash, etc.), we
             # notify the UI so the operator can restart it via the button.
@@ -689,22 +746,16 @@ class MatcherThread(threading.Thread):
                         "text": "⚠ 可视化进程已退出 — 请点击『🔄 重启可视化窗口』按钮",
                     })
 
-            # --- Recognition with jittered interval ---
-            # Jitter makes verification timing non-rhythmic (±30% of base)
-            # so a DJ's mix transitions don't accidentally synchronize with
-            # our match attempts. Also helps catch the 伴奏/原曲 case
-            # at different points in the track.
-            if self._capture_running:
-                elapsed = now - last_match_ts
-                if elapsed >= self._match_jitter_deadline:
-                    last_match_ts = now
-                    # Compute next interval: base ±30% random jitter
-                    jittered = base_interval * _random.uniform(0.7, 1.3)
-                    self._match_jitter_deadline = jittered
-                    try:
-                        self._run_match()
-                    except Exception as exc:
-                        self._log(f"Match loop error: {exc}", "error")
+            # Recompute the deadline AFTER recognition so a newly detected
+            # candidate gets the faster interval immediately.
+            if self._capture_running and now >= self._next_match_ts:
+                try:
+                    self._run_match()
+                except Exception as exc:
+                    self._clear_pending_match()
+                    self._log(f"Match loop error: {exc}", "error")
+                finally:
+                    self._schedule_next_match(now)
 
             # Push live input level to the UI ~10 fps so the user can
             # see whether their soundcard is receiving signal.  Works in

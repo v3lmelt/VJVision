@@ -3,6 +3,8 @@ import queue
 import unittest
 from unittest.mock import Mock, patch
 
+import numpy as np
+
 from vjvision.config import CaptureConfig
 from vjvision.fingerprint import MatchResult
 from vjvision.matcher import MatcherThread
@@ -23,6 +25,7 @@ class MatcherTransitionTests(unittest.TestCase):
         self.addCleanup(metadata_patch.stop)
         self.matcher = MatcherThread(queue.Queue(), queue.Queue(), queue.Queue())
         self.matcher._capture = Mock(sr=44100)
+        self.matcher._capture.snapshot.return_value = np.zeros((12 * 44100, 2), dtype=np.float32)
         self.matcher._capture_running = True
         self.matcher._fp = Mock()
         self.matcher._ensure_fp = Mock()
@@ -64,8 +67,8 @@ class MatcherTransitionTests(unittest.TestCase):
             self.assertEqual(self.matcher._current_track_path, "A")
         self.assertTrue(all(m["title"] == "A" for m in self.tracks()))
 
-    def test_weak_result_breaks_consecutive_new_track_hits(self):
-        for song in ("A", "B", "C"):
+    def test_conflicting_weak_result_breaks_new_track_evidence(self):
+        for song in ("A", "C"):
             with self.subTest(weak_song=song):
                 self.matcher._current_track_path = "A"
                 self.observe("A")
@@ -75,6 +78,30 @@ class MatcherTransitionTests(unittest.TestCase):
                 self.assertEqual(self.matcher._current_track_path, "A")
                 self.observe("B")
                 self.assertEqual(self.matcher._current_track_path, "B")
+
+    def test_same_candidate_weak_hit_does_not_vote_but_preserves_recent_evidence(self):
+        self.observe("B")
+        self.observe("B", .15)
+        self.assertEqual(self.matcher._current_track_path, "A")
+        self.assertEqual(self.matcher._pending_hits, 1)
+        self.observe("B")
+        self.assertEqual(self.matcher._current_track_path, "B")
+
+    def test_weak_hits_cannot_extend_evidence_expiry(self):
+        with patch("vjvision.matcher.time.monotonic", return_value=100):
+            self.observe("B")
+        with patch("vjvision.matcher.time.monotonic", return_value=103):
+            self.observe("B", .15)
+        with patch("vjvision.matcher.time.monotonic", return_value=105):
+            self.observe("B")
+        self.assertEqual(self.matcher._current_track_path, "A")
+        self.assertEqual(self.matcher._pending_hits, 1)
+
+    def test_noise_on_same_candidate_clears_evidence(self):
+        self.observe("B")
+        self.observe("B", .02)
+        self.observe("B")
+        self.assertEqual(self.matcher._current_track_path, "A")
 
     def test_unmatched_or_noise_result_breaks_consecutive_hits(self):
         for song in (None, "C"):
@@ -142,10 +169,116 @@ class MatcherTransitionTests(unittest.TestCase):
 
     def test_device_change_discards_previous_candidate(self):
         self.observe("B")
-        with patch("vjvision.matcher.AudioCapture", return_value=Mock(sr=44100)):
+        replacement = Mock(sr=44100)
+        replacement.snapshot.return_value = np.zeros((12 * 44100, 2), dtype=np.float32)
+        with patch("vjvision.matcher.AudioCapture", return_value=replacement):
             self.matcher._reconfigure_capture(7)
         self.observe("B")
         self.assertEqual(self.matcher._current_track_path, "A")
+        self.observe("B")
+        self.assertEqual(self.matcher._current_track_path, "B")
+
+
+class RecognitionWindowTests(unittest.TestCase):
+    def setUp(self):
+        self.config = CaptureConfig()
+        settings_patch = patch("vjvision.matcher.SETTINGS.capture", self.config)
+        settings_patch.start()
+        self.addCleanup(settings_patch.stop)
+        self.matcher = MatcherThread(queue.Queue(), queue.Queue(), queue.Queue())
+        self.matcher._current_track_path = "A"
+        self.matcher._fp = Mock()
+        self.samples = np.ones((120, 2), dtype=np.float32)
+
+    @staticmethod
+    def result(path, confidence):
+        return MatchResult(bool(path), path, confidence, 0.0, 1, {})
+
+    def test_accepted_current_track_skips_long_window(self):
+        self.matcher._fp.match_from_array.return_value = self.result("A", 0.30)
+        result = self.matcher._match_snapshot(self.samples, 10)
+        self.assertEqual(result.file_path, "A")
+        self.assertEqual(self.matcher._fp.match_from_array.call_count, 1)
+        self.assertEqual(len(self.matcher._fp.match_from_array.call_args.args[0]), 60)
+
+    def test_strong_secondary_deck_needs_long_window_support(self):
+        self.matcher._capture_running = True
+        self.matcher._capture = Mock(sr=10)
+        self.matcher._capture.snapshot.return_value = self.samples
+        self.matcher._fp.match_from_array.side_effect = [self.result("B", .50), self.result("A", .60)] * 3
+        with patch("vjvision.matcher.extract_track", return_value=Track("A", "A", "", "", None)):
+            for _ in range(3):
+                self.matcher._run_match()
+        self.assertEqual(self.matcher._current_track_path, "A")
+        self.assertEqual(self.matcher._pending_hits, 0)
+        self.assertTrue(self.matcher._in_mix)
+
+    def test_strong_short_hit_does_not_promote_weak_long_window(self):
+        self.matcher._fp.match_from_array.side_effect = [self.result("B", .70), self.result("B", .20)]
+        result = self.matcher._match_snapshot(self.samples, 10)
+        self.assertEqual((result.file_path, result.confidence), ("B", .20))
+
+    def test_long_window_supports_same_weak_candidate(self):
+        self.matcher._fp.match_from_array.side_effect = [self.result("B", .15), self.result("B", .50)]
+        result = self.matcher._match_snapshot(self.samples, 10)
+        self.assertEqual(result.confidence, .50)
+        self.assertEqual([len(c.args[0]) for c in self.matcher._fp.match_from_array.call_args_list], [60, 120])
+
+    def test_conflicting_old_track_does_not_override_recent_candidate(self):
+        self.matcher._fp.match_from_array.side_effect = [self.result("B", .15), self.result("A", .80)]
+        result = self.matcher._match_snapshot(self.samples, 10)
+        self.assertEqual((result.file_path, result.confidence), ("B", .15))
+
+    def test_long_window_can_recover_missing_short_candidate(self):
+        self.matcher._fp.match_from_array.side_effect = [self.result(None, 0), self.result("B", .40)]
+        self.assertEqual(self.matcher._match_snapshot(self.samples, 10).file_path, "B")
+
+    def test_silence_and_short_buffers_skip_duplicate_query(self):
+        for samples in (np.zeros_like(self.samples), self.samples[-60:]):
+            with self.subTest(frames=len(samples)):
+                self.matcher._fp.match_from_array.reset_mock()
+                self.matcher._fp.match_from_array.return_value = self.result(None, 0)
+                self.matcher._match_snapshot(samples, 10)
+                self.assertEqual(self.matcher._fp.match_from_array.call_count, 1)
+
+    def test_fallback_is_only_one_confirmation_per_snapshot(self):
+        self.matcher._capture_running = True
+        self.matcher._capture = Mock(sr=10)
+        self.matcher._capture.snapshot.return_value = self.samples
+        self.matcher._fp.match_from_array.side_effect = [self.result("B", .15), self.result("B", .50)]
+        with patch("vjvision.matcher.extract_track", return_value=Track("A", "A", "", "", None)):
+            self.matcher._run_match()
+        self.assertEqual(self.matcher._current_track_path, "A")
+        self.assertEqual(self.matcher._pending_hits, 1)
+
+    def test_initial_track_keeps_lower_acceptance_threshold(self):
+        self.matcher._current_track_path = None
+        self.matcher._fp.match_from_array.return_value = self.result("B", .25)
+        self.matcher._match_snapshot(self.samples, 10)
+        self.assertEqual(self.matcher._fp.match_from_array.call_count, 1)
+
+    def test_new_mix_uses_fast_deadline_immediately(self):
+        with patch("vjvision.matcher.time.monotonic", return_value=100), patch("vjvision.matcher.random.uniform", return_value=1):
+            self.matcher._schedule_next_match(100)
+            self.assertEqual(self.matcher._next_match_ts, 102)
+            self.matcher._in_mix = True
+            self.matcher._schedule_next_match(100)
+            self.assertEqual(self.matcher._next_match_ts, 101.25)
+
+    def test_slow_match_leaves_time_for_control_loop(self):
+        with patch("vjvision.matcher.time.monotonic", return_value=105), patch("vjvision.matcher.random.uniform", return_value=1):
+            self.matcher._schedule_next_match(100)
+        self.assertAlmostEqual(self.matcher._next_match_ts, 105.05)
+
+    def test_scheduling_enforces_new_audio_and_resets_on_stop(self):
+        self.config.match_candidate_interval = .1
+        self.matcher._in_mix = True
+        with patch("vjvision.matcher.time.monotonic", return_value=100), patch("vjvision.matcher.random.uniform", return_value=.1):
+            self.matcher._schedule_next_match(100)
+            self.assertEqual(self.matcher._next_match_ts, 101)
+        with patch("vjvision.matcher.extract_track", return_value=Track("A", "A", "", "", None)):
+            self.matcher._stop_capture()
+        self.assertEqual(self.matcher._next_match_ts, 0)
 
 
 if __name__ == "__main__":
