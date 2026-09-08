@@ -1,0 +1,2 @@
+# Install with --no-deps after requirements.txt to use its modern runtime.
+PyDejavu @ https://github.com/worldveil/dejavu/archive/e56a4a221ad204654a191d217f92aebf3f058b62.zip

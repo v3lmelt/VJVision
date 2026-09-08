@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import hashlib
 import logging
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Optional
 
@@ -24,6 +24,7 @@ class Track:
     artist: str
     album: str
     cover_path: Optional[str]   # absolute path to cached image, or None
+    details: dict = field(default_factory=dict)
 
 
 def _save_cover_bytes(data: bytes) -> Optional[str]:
@@ -107,4 +108,15 @@ def extract_track(file_path: str) -> Track:
             pass
 
     cover_path = _save_cover_bytes(cover_bytes) if cover_bytes else None
-    return Track(str(path), title, artist, album, cover_path)
+    info = getattr(audio, "info", None)
+    details = {
+        "bpm": vorbis_get("bpm") or id3_get("TBPM"),
+        "genre": vorbis_get("genre") or id3_get("TCON"),
+        "duration": getattr(info, "length", 0) or 0,
+        "sample_rate": getattr(info, "sample_rate", 0) or 0,
+        "bit_depth": getattr(info, "bits_per_sample", 0) or 0,
+        "channels": getattr(info, "channels", 0) or 0,
+        "bitrate": getattr(info, "bitrate", 0) or 0,
+        "format": path.suffix.lstrip(".").upper(),
+    }
+    return Track(str(path), title, artist, album, cover_path, details)

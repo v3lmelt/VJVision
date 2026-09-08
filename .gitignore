@@ -5,11 +5,14 @@ dist/
 *.spec.bak
 
 # Python
+.venv/
 __pycache__/
 *.pyc
 *.pyo
 
 # Cache & runtime data
+cache/
+data/
 cache/covers/
 cache/vj_visual.log
 data/vj_visual.log
@@ -17,3 +20,7 @@ data/vj_visual.log
 # IDE
 .vscode/
 .idea/
+
+# Generated previews: keep the documented sample only.
+artifacts/*
+!artifacts/apricot-preview.png

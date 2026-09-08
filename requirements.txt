@@ -1,11 +1,16 @@
 # Audio capture
+pyaudiowpatch>=0.2.12.6
 sounddevice>=0.4.6
 soundfile>=0.12.1
 numpy>=1.24,<2.0
 
-# Fingerprinting (dejavu requires MySQL + pyaudio; we only use dejavu's core)
+# Fingerprinting runtime. Install upstream separately with:
+# python -m pip install --no-deps -r requirements-dejavu.txt
+# Its historical dependency pins are incompatible with modern Python.
 mysql-connector-python>=8.0  # driver dejavu's MySQLDatabase expects
-dejavu>=0.1.0           # audio fingerprinting library (worldveil/dejavu fork on PyPI)
+scipy>=1.10,<2
+matplotlib>=3.7,<4
+pydub>=0.25.1
 
 # Metadata
 mutagen>=1.47.0

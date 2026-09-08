@@ -95,6 +95,7 @@ class VisualState:
     # hash count is diluted).  The text pulses gently to signal
     # "probably this, not yet locked in".
     tentative: bool = False
+    details: dict = field(default_factory=dict)
 
 
 # --------------------------------------------------------------------------- #
@@ -1233,6 +1234,8 @@ def run(queue, display_index: int = 1) -> None:
         rotation_speed=vcfg.rotation_speed,
         beat_reactive=vcfg.beat_reactive,
     )
+    from .pastel_visualizer import PastelRenderer
+    pastel = PastelRenderer(_pick_font(vcfg.font_name))
 
     def _get_text_surf(layout) -> "pygame.Surface":
         """Rendered track-info block, cached by content + size + font.
@@ -1268,6 +1271,7 @@ def run(queue, display_index: int = 1) -> None:
             if mtype == "quit":
                 running = False
             elif mtype == "spectrum":
+                pastel.observe(msg)
                 raw = np.asarray(msg["bins"], dtype=np.float32)
                 # Drop bin #0 — it straddles DC offset (0 Hz) which always
                 # reads high from soundcard ground-loop pickup.  Real audio
@@ -1337,6 +1341,7 @@ def run(queue, display_index: int = 1) -> None:
                 state.album = new_album
                 state.cover_path = new_cover
                 state.tentative = is_tentative
+                state.details = msg.get("details") or {}
 
                 if new_cover != rs["current_cover_path"]:
                     rs["current_cover_path"] = new_cover
@@ -1349,6 +1354,8 @@ def run(queue, display_index: int = 1) -> None:
                 state.artist = ""
                 state.album = ""
                 state.cover_path = None
+                state.details = {}
+                pastel.reset()
                 state.fade_active = False
                 state.fade_progress = 0.0
                 state.status = "Reset"
@@ -1366,6 +1373,8 @@ def run(queue, display_index: int = 1) -> None:
                 # Reset rotation angle too so it starts clean.
                 state.angle = 0.0
             elif mtype == "settings":
+                if msg.get("theme") in {"pastel", "classic"}:
+                    SETTINGS.visual.theme = msg["theme"]
                 if "style" in msg and msg["style"] in SPECTRUM_STYLES:
                     state.style = msg["style"]
                 if "rotation_speed" in msg:
@@ -1389,6 +1398,7 @@ def run(queue, display_index: int = 1) -> None:
                     new_font = str(msg["font_name"])
                     if new_font != SETTINGS.visual.font_name:
                         SETTINGS.visual.font_name = new_font
+                        pastel.set_font(_pick_font(new_font))
                         _reinit_display()
                 if "standby_image" in msg:
                     new_img = str(msg.get("standby_image") or "")
@@ -1475,6 +1485,11 @@ def run(queue, display_index: int = 1) -> None:
         screen_w = rs["screen_w"]
         screen_h = rs["screen_h"]
         fade_p = state.fade_progress if state.fade_active else 0.0
+
+        if SETTINGS.visual.theme == "pastel":
+            pastel.draw(screen, state, state.details, SETTINGS.visual.standby_image)
+            pygame.display.flip()
+            continue
 
         # Recompute layout every frame - cheap, and survives any resize /
         # fullscreen toggle without per-asset invalidation.

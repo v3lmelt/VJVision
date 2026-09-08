@@ -296,6 +296,17 @@ class DebugUI:
             anchor="w", padx=8, pady=(8, 0))
         from .config import SETTINGS as _S
 
+        theme_row = ctk.CTkFrame(self.display_frame, fg_color="transparent")
+        theme_row.pack(fill="x", padx=8, pady=8)
+        ctk.CTkLabel(theme_row, text="画面主题：").pack(side="left", padx=(0, 6))
+        self.theme_var = ctk.StringVar(
+            value="杏桃频谱" if _S.visual.theme == "pastel" else "经典流光")
+        ctk.CTkOptionMenu(
+            theme_row, variable=self.theme_var,
+            values=["杏桃频谱", "经典流光"], width=160,
+            command=self._on_theme_change,
+        ).pack(side="left")
+
         # Standby / LOGO image: an optional logo shown CENTERED (≤40% of
         # the screen, alpha channel supported) before the first track is
         # recognised. Its dominant colours drive the flowing background
@@ -325,7 +336,7 @@ class DebugUI:
         # Background mode selector: flowing colour blobs vs blurred cover.
         bg_row = ctk.CTkFrame(self.display_frame, fg_color="transparent")
         bg_row.pack(fill="x", padx=8, pady=(0, 8))
-        ctk.CTkLabel(bg_row, text="背景：").pack(side="left", padx=(0, 6))
+        ctk.CTkLabel(bg_row, text="经典主题背景：").pack(side="left", padx=(0, 6))
         self.bg_mode_var = ctk.StringVar(
             value="流光 (flow)" if _S.visual.bg_mode == "flow" else "封面模糊 (blur)")
         ctk.CTkOptionMenu(
@@ -682,6 +693,10 @@ class DebugUI:
 
     def _on_beat_change(self) -> None:
         self._send({"type": "settings", "beat_reactive": bool(self.beat_var.get())})
+
+    def _on_theme_change(self, choice: str) -> None:
+        self._send({"type": "settings",
+                    "theme": "pastel" if choice == "杏桃频谱" else "classic"})
 
     def _on_bg_mode_change(self, choice: str) -> None:
         """Switch between flowing-colour and blurred-cover backgrounds."""

@@ -101,6 +101,7 @@ class CaptureConfig:
 
 @dataclass
 class VisualConfig:
+    theme: str = "pastel"        # pastel instrument panel | classic flowing cover
     spectrum_style: str = "bar"     # one of: bar | wave | mirror
     rotation_speed: float = 0.3    # revolutions per second (slower for "chill" feel)
     beat_reactive: bool = False    # if True, rotation pulses with bass energy

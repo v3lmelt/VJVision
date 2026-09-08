@@ -109,6 +109,7 @@ class MatcherThread(threading.Thread):
                     "artist": t.artist,
                     "album": t.album,
                     "cover": t.cover_path,
+                    "details": t.details,
                     "_resync": True,   # hint for the visualizer
                 })
                 log.info("Re-synced current track to restarted viz: %s", t.title)
@@ -142,10 +143,16 @@ class MatcherThread(threading.Thread):
     # -- spectrum forwarder (called from the audio thread) ---------------
     def _on_spectrum(self, bins, peak) -> None:
         # Convert numpy array to plain list so multiprocessing pickles cheaply.
+        capture = self._capture
+        level = capture.current_level() if capture is not None else {}
         self._send_viz({
             "type": "spectrum",
             "bins": bins.tolist(),
             "peak": float(peak),
+            "rms": float(level.get("rms", peak)),
+            "input_peak": float(level.get("peak", peak)),
+            "sample_rate": capture.sr if capture is not None else 0,
+            "channels": capture.channels if capture is not None else 0,
         })
 
     # -- fingerprint DB lifecycle ---------------------------------------
@@ -503,6 +510,7 @@ class MatcherThread(threading.Thread):
                     "artist": track.artist,
                     "album": track.album,
                     "cover": track.cover_path,
+                    "details": track.details,
                     "tentative": True,
                 })
                 return
@@ -528,6 +536,7 @@ class MatcherThread(threading.Thread):
                         "artist": track.artist,
                         "album": track.album,
                         "cover": track.cover_path,
+                        "details": track.details,
                     })
                 # Different song during a mix → keep holding the current
                 # display (which is already pulsing).
@@ -557,6 +566,7 @@ class MatcherThread(threading.Thread):
                     "artist": track.artist,
                     "album": track.album,
                     "cover": track.cover_path,
+                    "details": track.details,
                 })
                 return
 
@@ -631,6 +641,7 @@ class MatcherThread(threading.Thread):
                 "artist": track.artist,
                 "album": track.album,
                 "cover": track.cover_path,
+                "details": track.details,
                 "tentative": True,
             })
             self._send_ui({
@@ -733,6 +744,7 @@ class MatcherThread(threading.Thread):
                         "artist": track.artist,
                         "album": track.album,
                         "cover": track.cover_path,
+                        "details": track.details,
                         "tentative": True,
                     })
 
@@ -824,6 +836,7 @@ class MatcherThread(threading.Thread):
             "artist": track.artist,
             "album": track.album,
             "cover": track.cover_path,
+            "details": track.details,
         })
         self._send_ui({
             "type": "track",
@@ -917,6 +930,8 @@ class MatcherThread(threading.Thread):
                 SETTINGS.visual.fullscreen = bool(msg["fullscreen"])
             if "bg_mode" in msg:
                 SETTINGS.visual.bg_mode = msg["bg_mode"]
+            if msg.get("theme") in {"pastel", "classic"}:
+                SETTINGS.visual.theme = msg["theme"]
             if "font_name" in msg:
                 SETTINGS.visual.font_name = str(msg["font_name"])
             if "standby_image" in msg:
