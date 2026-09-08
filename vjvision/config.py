@@ -97,6 +97,9 @@ class CaptureConfig:
                                      # switching the displayed track.  This
                                      # filters out the occasional low-confidence
                                      # false positive on a mid-track noise burst.
+    match_confidence: float = 0.30   # accepted hit for switching or mix recovery
+    first_track_confidence: float = 0.25  # preserve fast initial acquisition
+    mix_candidate_confidence: float = 0.06  # pulse current artwork, never switch
     spectrum_fps: int = 30         # how often FFT bins are pushed to the visualizer
     spectrum_bins: int = 48        # number of frequency bins rendered (denser bar grid)
 

@@ -14,6 +14,7 @@ __pycache__/
 # Personal libraries, runtime databases, logs and preferences
 cache/
 data/
+/tracks/
 
 # IDE
 .vscode/
