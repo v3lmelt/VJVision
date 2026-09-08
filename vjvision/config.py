@@ -83,20 +83,13 @@ class CaptureConfig:
     sample_rate: int = 44100
     channels: int = 2
     block_size: int = 1024          # frames per callback
-    match_seconds: int = 12          # length of clip passed to dejavu.
-                                     # 8s = too short for low-hash-density songs
-                                     # (confidence 0.05-0.12); 12s stabilises
-                                     # real matches at 0.20-0.85.
-    match_interval: int = 4          # seconds between recognition attempts.
-                                     # 12s was too slow when DJ switches tracks;
-                                     # 6s gave ~2 opportunities per change but
-                                     # long cross-fades still took ~28s to
-                                     # confirm; 4s catches the confidence climb
-                                     # faster during extended mixes.
-    match_confirmations: int = 2     # require N consecutive hits before
-                                     # switching the displayed track.  This
-                                     # filters out the occasional low-confidence
-                                     # false positive on a mid-track noise burst.
+    match_seconds: int = 12          # ring buffer and long-window fallback
+    fast_match_seconds: float = 6.0  # recent audio gets first chance to match
+    match_interval: float = 2.0      # stable-track recognition interval
+    match_candidate_interval: float = 1.25  # acquisition / mix confirmation
+    match_jitter_ratio: float = 0.10  # vary sampling phase without long pauses
+    match_confirmations: int = 2     # strong hits for a consistent candidate
+    match_confirmation_seconds: float = 4.0  # bound the age of pending evidence
     match_confidence: float = 0.30   # accepted hit for switching or mix recovery
     first_track_confidence: float = 0.25  # preserve fast initial acquisition
     mix_candidate_confidence: float = 0.06  # pulse current artwork, never switch

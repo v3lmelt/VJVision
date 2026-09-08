@@ -392,7 +392,8 @@ class AudioCapture:
     def snapshot(self) -> np.ndarray:
         with self._lock:
             buf = self._buf.copy()
-        return np.roll(buf, -self._write_pos, axis=0).astype(np.float32)
+            write_pos = self._write_pos
+        return np.roll(buf, -write_pos, axis=0)
 
     def save_temp_wav(self) -> Path:
         data = self.snapshot()
