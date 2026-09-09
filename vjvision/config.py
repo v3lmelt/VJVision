@@ -93,6 +93,11 @@ class CaptureConfig:
     match_confidence: float = 0.30   # accepted hit for switching or mix recovery
     first_track_confidence: float = 0.25  # preserve fast initial acquisition
     mix_candidate_confidence: float = 0.06  # pulse current artwork, never switch
+    match_aligned_min_hashes: int = 20
+    match_aligned_min_ratio: float = 0.20  # unique query fingerprints in one time band
+    match_aligned_min_span: float = 2.0
+    match_aligned_margin: float = 2.0  # lead over the next aligned song
+    match_position_tolerance: float = 0.75  # seconds of playback-position error
     spectrum_fps: int = 30         # how often FFT bins are pushed to the visualizer
     spectrum_bins: int = 48        # number of frequency bins rendered (denser bar grid)
 

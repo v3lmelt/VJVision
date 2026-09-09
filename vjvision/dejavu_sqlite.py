@@ -153,6 +153,26 @@ class SQLiteDatabase(CommonDatabase):
     # query parameter is uppercased to match the normalised storage.
     IN_MATCH = "UPPER(?)"
 
+    def return_matches_with_alignment(self, hashes, seconds_per_frame):
+        """Return legacy votes and unique aligned evidence from one SQL query."""
+        from collections import defaultdict
+        from .alignment import aligned_candidates
+
+        mapper = defaultdict(list)
+        for value, offset in hashes:
+            mapper[value.upper()].append(offset)
+        values, rows = list(mapper), []
+        with self.cursor() as cur:
+            for start in range(0, len(values), 1000):
+                batch = values[start:start + 1000]
+                cur.execute(self.SELECT_MULTIPLE % ",".join([self.IN_MATCH] * len(batch)), batch)
+                rows.extend(cur.fetchall())
+        matches, dedup = [], defaultdict(int)
+        for value, sid, offset in rows:
+            dedup[sid] += 1
+            matches.extend((sid, offset - position) for position in mapper[value])
+        return matches, dict(dedup), aligned_candidates(hashes, rows, seconds_per_frame)
+
     def __init__(self, **options: Any) -> None:
         super().__init__()
         db_path = options.get("path")

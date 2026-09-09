@@ -93,7 +93,8 @@ class TimedRecognizer:
         elapsed = time.perf_counter() - start
         self.clock.now += elapsed
         self.calls.append({"at": at, "seconds": elapsed, "window": len(samples) / input_sr,
-                           "song_id": result.song_id, "confidence": result.confidence})
+                           "song_id": result.song_id, "confidence": result.confidence,
+                           "aligned": result.raw.get("aligned_candidates", [])})
         return result
 
     def close(self):
@@ -176,7 +177,7 @@ def benchmark(args):
     result = {"baseline_ref": args.baseline_ref, "sample_rate": SR, "duration": DURATION,
               "offset": args.offset, "settings": {name: asdict(cfg) for name, _, cfg, _ in variants},
               "optimized_source_sha256": {name: hashlib.sha256((ROOT / "vjvision" / f"{name}.py").read_bytes()).hexdigest()
-                                          for name in ["matcher", "fingerprint", "config", "audio_capture"]},
+                                          for name in ["matcher", "fingerprint", "config", "audio_capture", "alignment", "dejavu_sqlite"]},
               "runs": [], "skipped": []}
     originals = fp_module.FINGERPRINTS_DB, fp_module.SONG_PATHS_DB
     with tempfile.TemporaryDirectory(prefix="vjvision-dj-") as folder:
@@ -217,11 +218,14 @@ def benchmark(args):
             result["song_ids"] = [sid for sid, _, _ in songs]
             result["database_songs"] = len(db._djv.db.get_songs())
             from dejavu.logic import fingerprint as fingerprint_logic
+            baseline_fp.FingerprintDB._optimize_dejavu_params()
+            baseline_erosion = fingerprint_logic.binary_erosion
+            fp_module.FingerprintDB._optimize_dejavu_params()
             result["kernel_checks"] = []
             for sid, _, data in songs:
                 pcm = (resample_poly(data[:12 * SR], 44100, SR, axis=0) * 30000).astype(np.int16)
                 hashes, timings = {}, {}
-                for name, erosion in [("baseline", ndimage.binary_erosion),
+                for name, erosion in [("baseline", baseline_erosion),
                                       ("optimized", fp_module.FingerprintDB._erode_peak_background)]:
                     start = time.perf_counter()
                     with patch.object(fingerprint_logic, "binary_erosion", erosion):
@@ -239,7 +243,7 @@ def benchmark(args):
                     # Both variants import the same Dejavu module. Restore
                     # the original kernel for baseline calls to avoid
                     # accidentally benchmarking the optimized baseline.
-                    erosion = (ndimage.binary_erosion if name == "baseline"
+                    erosion = (baseline_erosion if name == "baseline"
                                else fp_module.FingerprintDB._erode_peak_background)
                     with patch.object(fingerprint_logic, "binary_erosion", erosion):
                         row = simulate(module, cfg, method, db, stream, old, target, kind, seed, path_ids)

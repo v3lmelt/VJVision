@@ -201,6 +201,50 @@ class RecognitionWindowTests(unittest.TestCase):
         self.assertEqual(self.matcher._fp.match_from_array.call_count, 1)
         self.assertEqual(len(self.matcher._fp.match_from_array.call_args.args[0]), 60)
 
+    def aligned_result(self, **overrides):
+        evidence = dict(song_id=1, count=40, ratio=.3, span=3, offset_seconds=50)
+        evidence.update(overrides)
+        return MatchResult(True, "B", .5, 50, 1, {"aligned_candidates": [evidence]})
+
+    def test_unique_aligned_recent_evidence_skips_long_window(self):
+        self.matcher._fp.match_from_array.return_value = self.aligned_result()
+        result = self.matcher._match_snapshot(self.samples, 10)
+        self.assertEqual(result.raw["recent_position"], 56)
+        self.assertEqual(self.matcher._fp.match_from_array.call_count, 1)
+
+    def test_weak_sparse_or_competing_alignment_still_needs_long_window(self):
+        for change in [dict(count=19), dict(ratio=.19), dict(span=1.9), dict(song_id=2)]:
+            with self.subTest(change=change):
+                self.matcher._fp.match_from_array.reset_mock()
+                self.matcher._fp.match_from_array.side_effect = [self.aligned_result(**change), self.result("A", .5)]
+                result = self.matcher._match_snapshot(self.samples, 10)
+                self.assertFalse(result.raw.get("window_agrees", True))
+                self.assertEqual(self.matcher._fp.match_from_array.call_count, 2)
+        competing = self.aligned_result()
+        competing.raw["aligned_candidates"].append(dict(song_id=2, count=30))
+        self.matcher._fp.match_from_array.side_effect = [competing, self.result("A", .5)]
+        self.assertFalse(self.matcher._match_snapshot(self.samples, 10).raw["window_agrees"])
+
+    def test_recent_confirmation_requires_continuous_playback_position(self):
+        self.matcher._capture_running = True
+        self.matcher._capture = Mock(sr=10)
+        self.matcher._capture.snapshot.return_value = self.samples
+        self.matcher._ensure_fp = Mock()
+        with patch("vjvision.matcher.time.monotonic", return_value=100):
+            self.matcher._fp.match_from_array.return_value = self.aligned_result()
+            self.matcher._run_match()
+        with patch("vjvision.matcher.time.monotonic", return_value=102):
+            self.matcher._fp.match_from_array.return_value = self.aligned_result(offset_seconds=80)
+            self.matcher._run_match()
+        self.assertEqual(self.matcher._current_track_path, "A")
+        self.assertEqual(self.matcher._pending_hits, 1)
+        with patch("vjvision.matcher.time.monotonic", return_value=104), patch(
+                "vjvision.matcher.extract_track", return_value=Track("B", "B", "", "", None)):
+            self.matcher._fp.match_from_array.return_value = self.aligned_result(offset_seconds=82)
+            self.matcher._run_match()
+        self.assertEqual(self.matcher._current_track_path, "B")
+        self.assertIsNone(self.matcher._pending_position)
+
     def test_strong_secondary_deck_needs_long_window_support(self):
         self.matcher._capture_running = True
         self.matcher._capture = Mock(sr=10)

@@ -1006,7 +1006,13 @@ class FingerprintDB:
             return MatchResult(False, None, 0.0, 0.0, None, {})
 
         # --- 3. Query MySQL + align matches ---
-        matches, dedup_hashes, query_time = self._djv.find_matches(list(hashes))
+        query_started = time.time()
+        # The configured hop is 4096 * (1 - .25), not Dejavu's imported
+        # default overlap. Use the actual hop when reporting alignment.
+        seconds_per_frame = 4096 * (1 - .25) / self.TARGET_SR
+        matches, dedup_hashes, aligned = self._djv.db.return_matches_with_alignment(
+            list(hashes), seconds_per_frame)
+        query_time = time.time() - query_started
         t_align = time.time()
         final_results = self._djv.align_matches(matches, dedup_hashes, len(hashes))
         align_time = time.time() - t_align
@@ -1034,7 +1040,7 @@ class FingerprintDB:
         if isinstance(song_name, (bytes, bytearray)):
             song_name = song_name.decode("utf-8", errors="replace")
         confidence = float(best.get("input_confidence", 0) or 0)
-        offset = float(best.get("offset_seconds", 0) or 0)
+        offset = float(best.get("offset", 0) or 0) * seconds_per_frame
 
         # Normalise song_id to int.
         try:
@@ -1086,6 +1092,7 @@ class FingerprintDB:
             "fingerprint_time": total_time - query_time - align_time,
             "fingerprints_total": len(hashes),
             "results": final_results,
+            "aligned_candidates": aligned[:5],
         })
 
     def match(self, wav_path: str) -> MatchResult:
