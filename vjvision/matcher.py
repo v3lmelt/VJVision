@@ -59,6 +59,7 @@ class MatcherThread(threading.Thread):
         self._pending_path: Optional[str] = None
         self._pending_hits: int = 0
         self._pending_since: float = 0.0
+        self._pending_position: Optional[tuple[float, float]] = None
         # Hold the current artwork while a different candidate is being
         # confirmed. Recovery of the current track uses the same evidence rule.
         self._in_mix: bool = False
@@ -414,6 +415,7 @@ class MatcherThread(threading.Thread):
         self._pending_path = None
         self._pending_hits = 0
         self._pending_since = 0.0
+        self._pending_position = None
 
     def _set_mix_state(self, active: bool) -> None:
         """Keep the visualizer's pulse in sync without changing the track."""
@@ -446,7 +448,7 @@ class MatcherThread(threading.Thread):
         self._next_match_ts = 0.0
 
     def _match_snapshot(self, snapshot: "np.ndarray", sample_rate: int) -> MatchResult:
-        """Prefer recent evidence; verify switches and weak results over 12 s.
+        """Prefer aligned recent evidence; verify uncertain switches over 12 s.
 
         Both queries observe the same snapshot and produce a single result
         for the confirmation filter. Conflicting older evidence must not
@@ -463,6 +465,18 @@ class MatcherThread(threading.Thread):
                      and short.file_path != self._current_track_path)
         if ((accepted and not switching) or len(snapshot) <= frames):
             return short
+        aligned = short.raw.get("aligned_candidates", [])
+        if accepted and switching and aligned and aligned[0]["song_id"] == short.song_id:
+            best = aligned[0]
+            runner = aligned[1]["count"] if len(aligned) > 1 else 0
+            if (best["count"] >= cfg.match_aligned_min_hashes
+                    and best["ratio"] >= cfg.match_aligned_min_ratio
+                    and best["span"] >= cfg.match_aligned_min_span
+                    and best["count"] >= cfg.match_aligned_margin * runner):
+                # Track the estimated position at the end of the snapshot,
+                # so confirmation can reject jumps between repeated sections.
+                return replace(short, raw={**short.raw,
+                    "recent_position": best["offset_seconds"] + len(recent) / sample_rate})
         # A silent full buffer needs no second query. The fingerprint path
         # also guards silence, including callers outside this matcher.
         if not snapshot.any():
@@ -570,12 +584,19 @@ class MatcherThread(threading.Thread):
             1 if self._current_track_path is None
             else max(1, cfg.match_confirmations)
         )
+        position = result.raw.get("recent_position")
+        if (result.file_path == self._pending_path and position is not None
+                and self._pending_position is not None):
+            previous_position, previous_at = self._pending_position
+            if abs((position - previous_position) - (now - previous_at)) > cfg.match_position_tolerance:
+                self._clear_pending_match()
         if result.file_path == self._pending_path:
             self._pending_hits += 1
         else:
             self._pending_path = result.file_path
             self._pending_hits = 1
             self._pending_since = now
+        self._pending_position = (position, now) if position is not None else None
         if self._pending_hits < confirm_needed:
             log.info(
                 "Pending match (%d/%d): %s (conf=%.2f)",
